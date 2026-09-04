@@ -1,0 +1,36 @@
+SYSCALL TABLE ADDITION
+=======================================
+
+This is not a complete file, it's the 1 line you need to add to an
+existing file inside the Linux 6.14 kernel source tree.
+
+WHERE TO ADD IT:
+  File: arch/x86/entry/syscalls/syscall_64.tbl
+  (inside your extracted linux-6.14 source directory)
+
+WHAT TO DO:
+  1. Open that file in a text editor (vim, nano, whatever we are using
+     inside the VM).
+  2. Scroll to the bottom, it's a long list of existing syscalls, one
+     per line, tab-separated in 4 columns: number, abi, name, entry point.
+  3. Add 1 new line, using the next available number after whatever
+     the current last entry is (do not assume it's 470, check your
+     actual tree first, since this can drift slightly between kernel
+     point releases):
+
+470	common	setnice_logged		sys_setnice_logged
+
+  4. Use actual TAB characters between the columns, matching the
+     formatting of the existing lines above it: not spaces. Kernel
+     build scripts parse this file expecting tabs.
+  5. Save the file.
+
+WHY THIS LINE MATTERS:
+  This is what tells the kernel "syscall number 470 should route to the
+  function named sys_setnice_logged." Without this line, the number
+  470 means nothing to the kernel, and your test program's call to
+  syscall(470, ...) will fail — likely with ENOSYS ("function not
+  implemented").
+
+Do NOT delete or replace anything else in this file. You are only
+adding one new line at the end.
