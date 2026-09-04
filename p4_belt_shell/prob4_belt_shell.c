@@ -1,12 +1,12 @@
 /*
- * CS F372 - Assignment 1 - Problem 4: belt_shell
+ * CS F372: Assignment 1 Problem 4: belt_shell
  *
  * A minimal shell for a warehouse conveyor-belt controller.
  *   internal (no fork) : add_item <name>, list_items, quit
  *   external (fork+exec): date, ping <address>   (exactly 4 pings)
  *
- * Ctrl+C never kills the shell - it raises an emergency stop that clears
- * the item queue and returns to the prompt. Only `quit` exits.
+ * Ctrl+C never kills the shell: it raises an emergency stop that clears
+ * the item queue and returns to the prompt. Only 'quit' exits.
  *
  * Compile: gcc -Wall -Wextra -o belt_shell prob4_belt_shell.c
  * Run    : ./belt_shell
@@ -23,14 +23,14 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-#define MAX_INPUT_LEN 1023              /* longest line we must accept     */
-#define MAX_LINE    (MAX_INPUT_LEN + 2) /* + '\n' + '\0'                   */
-#define MAX_ITEMS   10                  /* belt queue capacity             */
-#define MAX_NAME    64                  /* longest item name we store      */
-#define MAX_TOKENS  64                  /* command + arguments             */
+#define MAX_INPUT_LEN 1023              // longest line we're willing to accept
+#define MAX_LINE    (MAX_INPUT_LEN + 2) // +1 for '\n', +1 for '\0'
+#define MAX_ITEMS   10                  // how many items the belt queue can hold
+#define MAX_NAME    64                  // longest item name we'll store
+#define MAX_TOKENS  64                  // command plus its args
 
-/* Set to 1 by the SIGINT handler. The handler does nothing else:
- * printing and clearing the queue happen in main(), in normal code. */
+// gets set to 1 inside the SIGINT handler. handler does nothing else,
+// all the actual printing and queue clearing happens in main() as normal code
 volatile sig_atomic_t emergency_stop = 0;
 
 static void sigint_handler(int signo)
@@ -39,8 +39,8 @@ static void sigint_handler(int signo)
     emergency_stop = 1;
 }
 
-/* Split "line" in place into tokens. tokens[] is NULL-terminated so it can
- * be handed straight to execvp(). Returns the number of tokens found. */
+// splits "line" into tokens in place. tokens[] ends with NULL so it can
+// be passed directly into execvp(). returns how many tokens it found
 static int split_line(char *line, char *tokens[], int max_tokens)
 {
     int count = 0;
@@ -54,7 +54,7 @@ static int split_line(char *line, char *tokens[], int max_tokens)
     return count;
 }
 
-/* fork -> child execs the program -> parent waits for it to finish. */
+// fork, child execs the program, parent just waits for it
 static void run_external(char *const argv[])
 {
     pid_t pid = fork();
@@ -64,18 +64,18 @@ static void run_external(char *const argv[])
         return;
     }
 
-    if (pid == 0) {                       /* ---- child ---- */
+    if (pid == 0) {                       // ---- child ----
         execvp(argv[0], argv);
-        /* only reached if exec failed */
+        // only reach here if exec actually failed
         fprintf(stderr, "belt_shell: cannot run %s: %s\n",
                 argv[0], strerror(errno));
         _exit(127);
     }
 
-    /* ---- parent ---- */
+    // ---- parent ----
     int status;
     while (waitpid(pid, &status, 0) < 0) {
-        if (errno != EINTR) {             /* EINTR = a signal woke us up */
+        if (errno != EINTR) {             // EINTR just means a signal woke us up, not a real error
             perror("belt_shell: waitpid");
             break;
         }
@@ -90,8 +90,9 @@ int main(void)
     char *tokens[MAX_TOKENS];
     int   ntok, i;
 
-    /* Install the SIGINT handler. sa_flags = 0 (no SA_RESTART) so that a
-     * Ctrl+C interrupts a blocking read instead of silently resuming it. */
+    // set up the SIGINT handler. sa_flags = 0 (no SA_RESTART) on purpose,
+    // so ctrl+C actually interrupts a blocking read instead of the read
+    // just quietly resuming like nothing happened
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_handler = sigint_handler;
@@ -103,37 +104,37 @@ int main(void)
     }
 
     for (;;) {
-        /* ---------- step 0: did a Ctrl+C arrive since last time? ---------- */
+        // ---------- step 0: did ctrl+C happen since the last loop? ----------
         if (emergency_stop) {
             emergency_stop = 0;
             item_count = 0;
             printf("\n[ALERT] Emergency stop triggered, item queue cleared\n");
         }
 
-        /* ---------- step 1: print the prompt ---------- */
+        // ---------- step 1: print the prompt ----------
         printf("belt-control$ ");
         fflush(stdout);
 
-        /* ---------- step 2: read one line ---------- */
+        // ---------- step 2: read one line ----------
         if (fgets(line, sizeof line, stdin) == NULL) {
-            if (emergency_stop) {        /* Ctrl+C interrupted the read */
-                clearerr(stdin);         /* (also clears the EOF flag)  */
-                continue;                /* top of loop prints the alert */
+            if (emergency_stop) {        // ctrl+C is what interrupted the read
+                clearerr(stdin);         // this also clears the EOF flag
+                continue;                // loop back around, top will print the alert
             }
-            if (feof(stdin)) {           /* Ctrl+D / end of piped input */
+            if (feof(stdin)) {           // ctrl+D or piped input just ended
                 printf("\n");
                 break;
             }
-            if (errno == EINTR) {       /* some other signal woke us up */
+            if (errno == EINTR) {       // some other signal woke us up
                 clearerr(stdin);
-                continue;               /* never exit on a signal */
+                continue;               // never exit just because of a signal
             }
-            perror("belt_shell: read"); /* a genuine read error */
+            perror("belt_shell: read"); // this is an actual read error
             break;
         }
 
-        /* Over-long line: consume the rest of it so the leftovers are not
-         * mistaken for the next command. */
+        // line was too long: drain the rest of it so leftover chars don't
+        // get mistaken for the start of the next command
         if (strchr(line, '\n') == NULL && !feof(stdin)) {
             int c;
             fprintf(stderr, "belt_shell: input too long (max %d characters)\n",
@@ -143,14 +144,14 @@ int main(void)
             continue;
         }
 
-        /* ---------- step 3: parse it ---------- */
+        // ---------- step 3: parse it ----------
         ntok = split_line(line, tokens, MAX_TOKENS);
-        if (ntok == 0)                   /* user just pressed Enter */
+        if (ntok == 0)                   // user just hit enter, nothing to do
             continue;
 
-        /* ---------- step 4: dispatch ---------- */
+        // ---------- step 4: figure out what to do with it ----------
 
-        /* ----- internal commands: no fork ----- */
+        // ----- internal commands, no fork needed ----- 
         if (strcmp(tokens[0], "quit") == 0) {
             break;
         }
@@ -173,7 +174,7 @@ int main(void)
                 for (i = 0; i < item_count; i++)
                     printf("%s\n", queue[i]);
         }
-        /* ----- external commands: fork + exec + wait ----- */
+        // ----- external commands, actually fork + exec + wait -----
         else if (strcmp(tokens[0], "date") == 0) {
             char *argv[] = { "date", NULL };
             run_external(argv);
@@ -186,7 +187,7 @@ int main(void)
                 run_external(argv);
             }
         }
-        /* ----- anything else ----- */
+        // ----- anything else, not a real command -----
         else {
             fprintf(stderr, "belt_shell: %s: command not found\n", tokens[0]);
         }

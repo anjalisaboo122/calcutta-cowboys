@@ -20,36 +20,37 @@
 #include <sys/msg.h>
 #include <sys/wait.h>
 
-/* message struct shared over the SysV queue.
- * mtype 1 = child -> parent  ("my turn, ask the user")
- * mtype 2 = parent -> child  ("here is the pid/command the user typed")
- */
+/* this struct is what actually goes over the message queue.
+ * mtype 1 = child telling parent "your turn, ask the user something"
+ * mtype 2 = parent replying with the pid/command the user typed */
 struct msgbuf {
     long mtype;
     long mval;
 };
 
-/* only used so the SIGINT handler (which the OS calls with a fixed
- * signature) can clean up the queue + child. Nothing else touches these. */
+/* these are only global because sigint_handler is called by the OS
+ * and its signature is fixed, so i can't pass it any args directly.
+ * nothing else in the code touches these two vars */
 static int      g_msqid   = -1;
 static pid_t    g_childpid = -1;
 
 static void sigint_handler(int sig) {
     (void)sig;
     write(STDOUT_FILENO, "\n[SIGINT] Shutting down...\n", 28);
-    if (g_childpid > 0) kill(g_childpid, SIGTERM);
-    if (g_msqid  >= 0) msgctl(g_msqid, IPC_RMID, NULL);
+    if (g_childpid > 0) kill(g_childpid, SIGTERM);   // kill the child too
+    if (g_msqid  >= 0) msgctl(g_msqid, IPC_RMID, NULL);   // clean up the queue so it doesn't leak
     _exit(0);
 }
 
 /* --- CHILD SIDE ------------------------------------------------------- */
 
-/* ps aux -> awk (compute score) -> sort (desc by score) -> head (top k)
- * built entirely with pipe()/fork()/dup2()/execlp() - no system()/popen(). */
+// builds the pipeline ps aux | awk (score calc) | sort (by score) | head (top k)
+// doing it manually with pipe/fork/dup2/execlp instead of system() or popen(),
+// since we're not allowed to use those
 static void print_top_k(int k) {
     printf("PID      COMMAND              CPU%%    MEM%%    SCORE\n");
 
-    int pipe1[2], pipe2[2], pipe3[2]; /* ps->awk, awk->sort, sort->head */
+    int pipe1[2], pipe2[2], pipe3[2]; // pipe1: ps->awk, pipe2: awk->sort, pipe3: sort->head
     if (pipe(pipe1) < 0 || pipe(pipe2) < 0 || pipe(pipe3) < 0) {
         perror("pipe");
         return;
@@ -58,11 +59,12 @@ static void print_top_k(int k) {
     char head_n[16];
     snprintf(head_n, sizeof(head_n), "%d", k);
 
+    // awk script computes the "score" as 3*cpu + 2*mem for each process
     const char *awk_prog =
         "NR>1{printf \"%-8s %-20s %-7s %-7s %.2f\\n\", "
         "$2,$11,$3,$4,(3*$3+2*$4)}";
 
-    /* Stage 1: ps aux  (writes into pipe1) */
+    // Stage 1: ps aux, output goes into pipe1
     pid_t p1 = fork();
     if (p1 == 0) {
         dup2(pipe1[1], STDOUT_FILENO);
@@ -73,7 +75,7 @@ static void print_top_k(int k) {
         perror("execlp ps"); _exit(1);
     }
 
-    /* Stage 2: awk  (reads pipe1, writes pipe2) */
+    // Stage 2: awk, reads from pipe1, writes score lines into pipe2
     pid_t p2 = fork();
     if (p2 == 0) {
         dup2(pipe1[0], STDIN_FILENO);
@@ -85,7 +87,7 @@ static void print_top_k(int k) {
         perror("execlp awk"); _exit(1);
     }
 
-    /* Stage 3: sort  (reads pipe2, writes pipe3) */
+    // Stage 3: sort, reads pipe2, sorts by score column, writes into pipe3
     pid_t p3 = fork();
     if (p3 == 0) {
         dup2(pipe2[0], STDIN_FILENO);
@@ -97,7 +99,7 @@ static void print_top_k(int k) {
         perror("execlp sort"); _exit(1);
     }
 
-    /* Stage 4: head -n k  (reads pipe3, writes to our real stdout) */
+    // Stage 4: head -n k, reads pipe3, prints straight to our actual stdout
     pid_t p4 = fork();
     if (p4 == 0) {
         dup2(pipe3[0], STDIN_FILENO);
@@ -108,8 +110,8 @@ static void print_top_k(int k) {
         perror("execlp head"); _exit(1);
     }
 
-    /* we (the monitor's child) don't need any pipe ends - close them all,
-     * then wait for the whole pipeline to finish before moving on */
+    // this process (the monitor's child) doesn't need any pipe end itself,
+    // so close everything and just wait for the whole chain to finish
     close(pipe1[0]); close(pipe1[1]);
     close(pipe2[0]); close(pipe2[1]);
     close(pipe3[0]); close(pipe3[1]);
@@ -120,8 +122,8 @@ static void print_top_k(int k) {
     waitpid(p4, NULL, 0);
 }
 
-/* runs `ps -p <pid> -o comm=,user=,pcpu=,pmem=` via raw pipe/fork/exec
- * (no popen), reads its one line of output back through the pipe. */
+// runs "ps -p <pid> -o comm=,user=,pcpu=,pmem=" manually (fork/pipe/exec, no popen)
+// and reads back the single line of output through the pipe
 static void handle_pid_action(long pid_in) {
     pid_t pid = (pid_t)pid_in;
     char pidbuf[16];
@@ -142,8 +144,9 @@ static void handle_pid_action(long pid_in) {
         perror("execlp ps -p"); _exit(1);
     }
 
-    close(fd[1]); /* parent (child_loop's process) only reads */
+    close(fd[1]); // we only read here, so close the write end
 
+    // keep reading until we fill the buffer or the pipe runs dry
     char line[256] = {0};
     ssize_t total = 0, got;
     while (total < (ssize_t)sizeof(line) - 1 &&
@@ -179,12 +182,12 @@ static void child_loop(int n, int k, int r, int msqid) {
         if (iter == r) {
             iter = 0;
 
-            /* tell parent it's their turn */
+            // let parent know it's their turn to ask the user something
             msg.mtype = 1;
             msg.mval  = 1;
             msgsnd(msqid, &msg, sizeof(msg.mval), 0);
 
-            /* block until parent responds */
+            // now just wait here until parent sends a reply back
             msgrcv(msqid, &msg, sizeof(msg.mval), 2, 0);
             long pid_in = msg.mval;
 
@@ -207,14 +210,14 @@ static void parent_loop(int msqid, pid_t childpid) {
     struct msgbuf msg;
 
     while (1) {
-        /* block until child says "your turn" */
+        // just sit here until child says "your turn"
         msgrcv(msqid, &msg, sizeof(msg.mval), 1, 0);
 
         long pid_in;
         printf("\nEnter PID to act on (-1 = skip, -2 = quit): ");
         fflush(stdout);
         if (scanf("%ld", &pid_in) != 1) {
-            /* bad input, treat as skip */
+            // user typed something weird, just treat it as skip
             int c; while ((c = getchar()) != '\n' && c != EOF) {}
             pid_in = -1;
         }
@@ -241,7 +244,7 @@ int main(void) {
         exit(1);
     }
 
-    /* message queue MUST exist before fork() so both processes share it */
+    // queue has to be created before fork() so both parent and child see the same one
     key_t key = ftok(".", 'R');
     if (key == -1) { perror("ftok"); exit(1); }
 
@@ -255,14 +258,14 @@ int main(void) {
     }
 
     if (pid == 0) {
-        /* CHILD */
+        // CHILD
         child_loop(n, k, r, msqid);
         exit(0);
     } else {
-        /* PARENT */
+        // PARENT
         g_msqid   = msqid;
         g_childpid = pid;
-        signal(SIGINT, sigint_handler);
+        signal(SIGINT, sigint_handler);   // so ctrl+c cleans up the queue instead of leaving it behind
 
         parent_loop(msqid, pid);
     }

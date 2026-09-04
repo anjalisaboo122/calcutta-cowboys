@@ -1,14 +1,14 @@
-/* EXCERPT ONLY — this is NOT a complete, standalone-compilable file.
+/* EXCERPT ONLY: this is not a complete, standalone-compilable file.
  * This block was appended to kernel/sys.c inside the Linux 6.14 source
  * tree, near the other SYSCALL_DEFINE blocks. It relies on kernel-only
  * symbols (struct task_struct, current, task_nice, set_user_nice,
  * printk, KERN_INFO, EINVAL) that only exist inside the kernel build —
- * running `gcc` on this file alone will NOT compile. It only works as
+ * running 'gcc' on this file alone will NOT compile. It only works as
  * part of a full kernel rebuild.
  */
 
 /*
- * setnice_logged - change the calling process's nice value and log it
+ * setnice_logged: change the calling process's nice value and log it
  * @nice_val: requested nice value, must be in [-20, 19]
  *
  * Returns 0 on success, -EINVAL if nice_val is out of range.

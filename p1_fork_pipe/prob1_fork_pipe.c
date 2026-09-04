@@ -5,7 +5,7 @@
 #include <sys/types.h>
 #include <time.h>
 
-/* No global variables anywhere, gcd() takes params, main() keeps its own locals */
+// no globals, gcd() just takes params and main() has its own locals
 int gcd(int a, int b) {
     while (b != 0) {
         int t = b;
@@ -17,11 +17,11 @@ int gcd(int a, int b) {
 
 int main(void) {
     int arr[] = {18, 24, 35, 49, 10, 63, 27, 40, 14, 21};
-    int n = sizeof(arr) / sizeof(arr[0]);   /* n = 10, guaranteed even */
+    int n = sizeof(arr) / sizeof(arr[0]);   // n = 10, always even
     int rounds = n / 2;
 
-    int p2c[2];  /* parent -> child : carries {x, y} */
-    int c2p[2];  /* child -> parent : carries {g}     */
+    int p2c[2];  // parent to child, sends {x, y}
+    int c2p[2];  // child to parent, sends {g}
 
     if (pipe(p2c) == -1 || pipe(c2p) == -1) {
         perror("pipe");
@@ -37,14 +37,14 @@ int main(void) {
     }
 
     if (pid == 0) {
-        /* ---------------- CHILD ---------------- */
-        close(p2c[1]);   /* child never writes to p2c */
-        close(c2p[0]);   /* child never reads c2p     */
+        // ---------------- CHILD ----------------
+        close(p2c[1]);   // child doesn't write to p2c
+        close(c2p[0]);   // child doesn't read c2p
 
         for (int i = 0; i < rounds; i++) {
             int buf[2];
             ssize_t r = read(p2c[0], buf, sizeof(buf));
-            if (r <= 0) break;   /* pipe closed / parent gone -> stop */
+            if (r <= 0) break;   // pipe closed or parent died, just stop
 
             int x = buf[0], y = buf[1];
             int g = gcd(x, y);
@@ -62,22 +62,22 @@ int main(void) {
         exit(0);
 
     } else {
-        /* ---------------- PARENT ---------------- */
-        close(p2c[0]);   /* parent never reads p2c */
-        close(c2p[1]);   /* parent never writes c2p */
+        // ---------------- PARENT ----------------
+        close(p2c[0]);   // parent doesn't read p2c
+        close(c2p[1]);   // parent doesn't write c2p
 
         int local_arr[10];
         for (int i = 0; i < n; i++) local_arr[i] = arr[i];
         int remaining = n;
 
         for (int i = 0; i < rounds; i++) {
-            /* pick and remove first element: swap-with-last, shrink */
+            // grab first number, swap with last and shrink array
             int idx1 = rand() % remaining;
             int x = local_arr[idx1];
             local_arr[idx1] = local_arr[remaining - 1];
             remaining--;
 
-            /* pick and remove second, distinct, element the same way */
+            // grab second number same way, guaranteed different index
             int idx2 = rand() % remaining;
             int y = local_arr[idx2];
             local_arr[idx2] = local_arr[remaining - 1];
@@ -101,7 +101,7 @@ int main(void) {
 
         close(p2c[1]);
         close(c2p[0]);
-        wait(NULL);   /* reap the child so it doesn't become a zombie */
+        wait(NULL);   // reap the child, don't leave a zombie around
     }
 
     return 0;

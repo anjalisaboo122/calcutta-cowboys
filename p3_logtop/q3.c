@@ -3,14 +3,14 @@
  *
  * Usage: ./logtop <logfile> <column>
  *
- * Reproduces, via fork()+pipe()+dup2()+exec() only (no manual counting
- * or sorting logic in this file):
+ * Builds this pipeline manually using fork()+pipe()+dup2()+exec() only,
+ * no counting or sorting logic written by hand in this file:
  *
  *   cut -d' ' -f<column> <logfile> | sort | uniq -c | sort -rn | head -5
  *
- * 5 external programs  =>  4 pipes connecting consecutive stages.
- * Stage 0's input is the file itself (passed as an argument to cut,
- * not via stdin). Stage 4's output is left going to our real stdout.
+ * 5 programs total, so 4 pipes connect them.
+ * Stage 0 reads the file directly as an arg to cut, not from stdin.
+ * Stage 4's output just goes to our normal stdout, nothing special.
  */
 
 #include <stdio.h>
@@ -39,7 +39,7 @@ int main(int argc, char *argv[]) {
     const char *logfile = argv[1];
     const char *column  = argv[2];
 
-    /* Validate column is a positive integer, e.g. reject "abc" or "-1" */
+    // make sure column is actually a positive number, catch stuff like "abc" or "-1" early
     char *endptr;
     long col_val = strtol(column, &endptr, 10);
     if (*endptr != '\0' || col_val <= 0) {
@@ -47,8 +47,8 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    /* Fail fast with a clear message if the log file isn't readable,
-       instead of letting a cryptic error surface from inside cut. */
+    // check the file is readable now instead of letting cut fail later
+    // with some confusing error buried in the pipeline
     if (access(logfile, R_OK) != 0) {
         fprintf(stderr, "Error: cannot read log file \"%s\": %s\n", logfile, strerror(errno));
         return EXIT_FAILURE;
@@ -73,54 +73,54 @@ int main(int argc, char *argv[]) {
         }
 
         if (pid == 0) {
-            /* ---------- Child: stage i of the pipeline ---------- */
+            // ---------- Child: this is stage i of the pipeline ----------
 
             if (i > 0)
-                dup2(pipes[i - 1][0], STDIN_FILENO);   /* read from previous stage */
+                dup2(pipes[i - 1][0], STDIN_FILENO);   // read from the previous stage's pipe
             if (i < NPIPES)
-                dup2(pipes[i][1], STDOUT_FILENO);       /* write to next stage      */
+                dup2(pipes[i][1], STDOUT_FILENO);       // write into the next stage's pipe
 
-            /* Every pipe fd must be closed in every child, including
-               the ones we just dup'd -- dup2 leaves the originals open
-               too, and any leftover copy of a write end can make a
-               downstream reader hang forever waiting for EOF. */
+            // gotta close every pipe fd here, even the ones we just dup'd.
+            // dup2 doesn't close the original, so if we leave any write end
+            // open by accident, whoever's reading downstream just hangs
+            // forever waiting for an EOF that never comes
             close_all_pipes(pipes);
 
             switch (i) {
-                case 0: /* cut -d' ' -f<column> <logfile> */
+                case 0: // cut -d' ' -f<column> <logfile>
                     execlp("cut", "cut", "-d", " ", "-f", column, logfile, (char *)NULL);
                     break;
-                case 1: /* sort */
+                case 1: // sort
                     execlp("sort", "sort", (char *)NULL);
                     break;
-                case 2: /* uniq -c */
+                case 2: // uniq -c
                     execlp("uniq", "uniq", "-c", (char *)NULL);
                     break;
-                case 3: /* sort -rn */
+                case 3: // sort -rn
                     execlp("sort", "sort", "-rn", (char *)NULL);
                     break;
-                case 4: /* head -5 */
+                case 4: // head -5
                     execlp("head", "head", "-5", (char *)NULL);
                     break;
             }
 
-            /* Only reached if execlp() itself failed */
+            // only get here if execlp actually failed to run
             fprintf(stderr, "logtop: exec failed for stage %d: %s\n", i, strerror(errno));
             _exit(EXIT_FAILURE);
         }
 
-        pids[i] = pid; /* ---------- Parent: remember this child's pid, keep forking ---------- */
+        pids[i] = pid; // ---------- Parent: just save the pid and keep forking the next stage ----------
     }
 
-    /* Parent needs none of the pipe fds itself -- close every last one
-       BEFORE waiting, so EOF can actually propagate down the chain. */
+    // parent doesn't need any pipe fds at all, close everything
+    // BEFORE waiting, otherwise EOF can't travel down the chain properly
     close_all_pipes(pipes);
 
     int status, exit_code = EXIT_SUCCESS;
     for (int i = 0; i < NSTAGES; i++) {
         waitpid(pids[i], &status, 0);
         if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-            exit_code = EXIT_FAILURE; /* propagate a failure from any stage */
+            exit_code = EXIT_FAILURE; // if any single stage failed, whole thing counts as a fail
     }
 
     return exit_code;
